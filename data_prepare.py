@@ -5,6 +5,7 @@ import torch.utils.data as data
 import torchvision.transforms as transform
 from data_read import combined_roidb, obtain_data, jitter
 from cfg import *
+import matplotlib.pyplot as plt
 
 
 class wider_face(data.Dataset):
@@ -16,8 +17,8 @@ class wider_face(data.Dataset):
 
     def __getitem__(self, item):
         image, gt_map = obtain_data(self.imdb, item)
-        image = self.trans_img(image)  # .transpose((2, 0, 1))
-        gt_map = self.trans_gt(gt_map)
+        image = self.trans_img(image)  # FloatTensor
+        gt_map = self.trans_gt(gt_map)  # FloatTensor
         return image, gt_map
 
     def trans_img(self, data):
@@ -34,7 +35,8 @@ class wider_face(data.Dataset):
         return data
 
     def trans_gt(self, gt):
-        gt = cv2.resize(gt, (HW_h, HW_w), interpolation=cv2.INTER_NEAREST)
+        # total stride equals 8
+        gt = cv2.resize(gt, (HW_h / 8, HW_w / 8), interpolation=cv2.INTER_NEAREST)
         return torch.from_numpy(gt)
 
 
@@ -67,7 +69,7 @@ def patch_data(batch):
         img.append(input)
         gt.append(target)  # torch.unsqueeze(target, 0)
     img = torch.stack(img, 0)
-    gt = torch.stack(gt, 0)
+    gt = torch.stack(gt, 0).unsqueeze(1)  # batch,1,h,w
     return img, gt
 
 

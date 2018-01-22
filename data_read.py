@@ -19,6 +19,7 @@ import cv2, PIL
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import ImageEnhance, Image
+import multiprocessing, threading
 
 
 def parse_args():
@@ -43,7 +44,7 @@ def parse_args():
                         default=None, type=str)
     parser.add_argument('--imdb', dest='imdb_name',
                         help='dataset to train on',
-                        default='wf_train1', type=str)
+                        default='wf_train', type=str)
     parser.add_argument('--rand', dest='randomize',
                         help='randomize (do not use a fixed seed)',
                         action='store_true')
@@ -73,7 +74,7 @@ def combined_roidb1(imdb_names):
         image_path = imdb.image_path_from_index(term)
         image = cv2.imread(image_path)
         sz = image.shape
-        print 'sz:', sz
+        # print 'sz:', sz
         ground_truth_heat_map(sz, anno, vis=vis)
     if vis:
         plt.show()
@@ -107,9 +108,33 @@ def obtain_data(imdb, item):
     anno = imdb._load_face_annotation(term)['boxes']
     image = cv2.imread(imdb.image_path_from_index(term))
     sz = image.shape
-    print 'sz:', sz
+    # print 'sz:', sz
     gt_map = ground_truth_heat_map(sz, anno)
     return image, gt_map.astype(np.float32)
+
+
+def defin_canv_Pro(anno, w, h):
+    x0, y0, x1, y1 = anno
+    x, y = (x1 + x0) / 2.0, (y0 + y1) / 2.0
+    eclipse_a = x - x0
+    eclipse_b = y - y0
+    canvas = np.zeros((h, w))
+    if eclipse_b and eclipse_a:
+        canvas[y0 - 1:y1, x0 - 1:x1] = 1
+        eclipse = build_eclipse(x, y, eclipse_a, eclipse_b, (w, h))
+        canvas *= eclipse
+    return canvas
+
+
+def defin_canv_Thre(i, anno, canvas, w, h):
+    x0, y0, x1, y1 = anno
+    x, y = (x1 + x0) / 2.0, (y0 + y1) / 2.0
+    eclipse_a = x - x0
+    eclipse_b = y - y0
+    if eclipse_b and eclipse_a:
+        canvas[i, y0 - 1:y1, x0 - 1:x1] = 1
+        eclipse = build_eclipse(x, y, eclipse_a, eclipse_b, (w, h))
+        canvas[i] *= eclipse
 
 
 def ground_truth_heat_map(size, box, vis=False):
@@ -119,15 +144,27 @@ def ground_truth_heat_map(size, box, vis=False):
     faces = len(box)
     h, w, _ = size
     canvas = np.zeros((faces, h, w))  # line col;
-
+    result = []
+    ''' 
+    # multi processing
+    
+    pool = multiprocessing.Pool()
+    for anno in box:
+        result.append(pool.apply_async(defin_canv_Pro, args=(anno, w, h)))
+    pool.close()
+    pool.join()
+    for i in range(faces):
+        canvas[i] = result[i].get()
+    '''
+    # multi thread
     for i, anno in enumerate(box):
-        x0, y0, x1, y1 = anno
-        x, y = (x1 + x0) / 2.0, (y0 + y1) / 2.0
-        eclipse_a = x - x0
-        eclipse_b = y - y0
-        canvas[i, y0 - 1:y1, x0 - 1:x1] = 1
-        eclipse = build_eclipse(x, y, eclipse_a, eclipse_b, (w, h))
-        canvas[i] *= eclipse
+        t = threading.Thread(target=defin_canv_Thre, args=(i, anno, canvas, w, h))
+        result.append(t)
+        t.start()
+    for t in result:
+        t.join()
+    for t in result:
+        t.stop()
     canvas = np.max(canvas, axis=0)
     if vis:
         fig, ax = plt.subplots()
@@ -149,7 +186,7 @@ def build_eclipse(x, y, L_a, C_b, sz):
     eclipse_Lx = ((eclipse_Lx - x) / L_a) ** 2
     eclipse_Ly = ((eclipse_Ly - y) / C_b) ** 2
     eclipse = -(eclipse_Lx + eclipse_Ly) / (2 * delta ** 2)
-    eclipse = np.e ** eclipse
+    eclipse = np.e ** eclipse * 2
     return eclipse
 
 

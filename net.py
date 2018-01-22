@@ -9,22 +9,22 @@ class wider_net(nn.Module):
     def __init__(self):
         super(wider_net, self).__init__()
         self.build_base()
-        self.up=nn.UpsamplingBilinear2d(scale_factor=2)
+        self.up = nn.Upsample(scale_factor=2)
         self.filter_1 = nn.Conv2d(1024, 256, 1)
         self.filter_2 = nn.Conv2d(256, 1, 1)
 
-    def forward(self, x, vis):
+    def forward(self, x):
         # conv 4_3 =25;conv5_3=29
-        y=0
+        y = 0
         for k in range(len(self.base_net)):
             x = self.base_net[k](x)
-            if k == 25:
-                y=x
-        if y!=0:
-            x=self.up(x)
-            x=torch.cat((x,y),0)
-            x=self.filter_1(x)
-            x=self.filter_2(x)
+            if k == 22:
+                y = x
+        if not isinstance(y, int):
+            x = self.up(x)
+            x = torch.cat((x, y), 1)
+            x = self.filter_1(x)
+            x = self.filter_2(x)
         # for k in range(len(self.extra)):
         #    x = self.extra[k](x)
         return x
@@ -54,8 +54,8 @@ class wider_net(nn.Module):
                 base.append(key)
         self.base_net = nn.ModuleList(base)
         # self.add_extras()
-        for ex in self.extra:
-            ex.apply(self.weight_init)
+        # for ex in self.extra:
+        #    ex.apply(self.weight_init)
 
 
 def load_saved(net, path):
@@ -69,9 +69,15 @@ def load_saved(net, path):
             if len(file) >= 2:
                 bigger.append(int(file[1]))
     if bigger:
-        save_data = torch.load(path.format(max(bigger)))
-        net.load_state_dict(save_data['net_state'])
-        now_iter = save_data['iter']
+        saved_data = torch.load(path.format(max(bigger)))
+        saved_state = saved_data['net_state']
+        from collections import OrderedDict
+        trans_param = OrderedDict()
+        for item, value in saved_state.items():
+            name = '.'.join(item.split('.')[1:])
+            trans_param[name] = value
+        net.load_state_dict(trans_param)
+        now_iter = saved_data['iter']
         return now_iter
     return 0
 
