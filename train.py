@@ -6,56 +6,74 @@ import time
 from data_prepare import *
 from net import *
 from total_loss import loss_detection
-import visdom
+from data_read import show_feature
+from cfg import set_big
 
 
 def train():
     epoch = 20  # how many times will be reciur for data
-    batch_size = 24  # images in every batch
+    batch_size = 5  # images in every batch
     # snap_shot = 300
     # batch_iteration = 0
-    device_ids = [5, 6, 7]
-    model_place = '../output/my/face_new__{}__model.pth'
-    dataset = wider_face()
-    epoch_size = len(dataset) / batch_size
-    data_loader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                                  pin_memory=True, drop_last=True, collate_fn=patch_data)
+    device_id = 1
+    model_place = '../output/my2/face_new__{}__model.pth'
 
     net = wider_net()
     batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters
     cudnn.benchmark = True
-    net = net.cuda(device_ids[0])
+    net = net.cuda(device_id)
+    use_skip = False  # for part connection of net,stop use tiny face in the beginning
 
-    net = nn.DataParallel(net, device_ids=device_ids)
     lr = 1e-2
     momentum = 0.9
     weight_decay = 1e-3
     param = get_param(net, lr)
     optimizer = optim.SGD(param, momentum=momentum, weight_decay=weight_decay)
+
     loss = loss_detection()
 
-    optimizer = nn.DataParallel(optimizer, device_ids=device_ids)
+    dataset = wider_face()
+    epoch_size = len(dataset) / batch_size
+    data_loader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=6,
+                                  pin_memory=True, drop_last=True, collate_fn=patch_data)
 
     while batch_iteration < (epoch * epoch_size):
         t = time.time()
+        epoch_now = batch_iteration / epoch_size
+        # if batch_iteration > 0:
+        #     use_skip = True
+        if use_skip:
+            set_big(not use_skip)
         # learing rate decay
-        if batch_iteration != 0 and (batch_iteration / epoch_size) % 5 == 0:
-            for param_lr in optimizer.module.param_groups:
-                param_lr['lr'] /= 2
+        if batch_iteration != 0 and (epoch_now) % 5 == 0:
+            for param_lr in optimizer.param_groups:
+                param_lr['lr'] /= 10
 
-        for img, gt_heatmap in data_loader:
-            img = Variable(img, requires_grad=True).cuda(device_ids[0])  # device_ids[0]
-            gt_heatmap = Variable(gt_heatmap).cuda(device_ids[0])
+        for imgs, gt_heatmaps, mask, used_layer in data_loader:
+            img = Variable(imgs, requires_grad=True).cuda(device_id)
+            gt_heatmap = Variable(gt_heatmaps).cuda(device_id)
+            # mask = Variable(mask).cuda(device_id)
 
-            predicted = net(img)
+            predicted = net(img, use_skip)  # freeze tiny face
+            # & skip
+            if batch_iteration % 1000 == 0:  # show the feature map
+                show_feature(predicted)
+
+            mask = prepare_prediction_with_mask(predicted, mask, used_layer)
+            predicted = torch.mul(predicted, mask)  # only face will be penase or congrulation
+
             l = loss(gt_heatmap, predicted)
 
             # compute gradient and do SGD step
             optimizer.zero_grad()
             l.backward()
-            optimizer.module.step()
-            print 'loss is: {:.3f},and iter is {} with time {}'. \
-                format(l.data[0], batch_iteration, time.time() - t)
+            optimizer.step()
+
+            # total n
+            tn = reduce(lambda x, y: x * y, predicted.size())
+            loss_now = l * tn / (torch.sum(mask) + 1)
+            print 'loss is: {:.4f},and iter is {} with time {}'. \
+                format(loss_now.data[0], batch_iteration, time.time() - t)
             t = time.time()
             # todo:vis score & save parameters
             batch_iteration += 1
