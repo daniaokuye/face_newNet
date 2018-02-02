@@ -14,7 +14,7 @@ import _init_paths
 from fast_rcnn.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from datasets.factory import get_imdb
 import datasets.imdb
-from cfg import stride_all
+from cfg import stride_all, total_thread
 import argparse
 import cv2, PIL, time, os
 import matplotlib.pyplot as plt
@@ -101,8 +101,15 @@ def defin_canv(i, anno, canvas, mask, used_layer, w, h):
     # if big_now and not (eclipse_a * 2 / 16 >= 1 and eclipse_b * 2 / 16 >= 1):  # eclipse_a*2 / 16
     #     work = False
     if eclipse_b and eclipse_a:
+        # too little objects(face) will transform in gt as well as mask
+        if eclipse_a * 2 / 9.0 < 1:
+            eclipse_a = 8
+        if eclipse_b * 2 / 9.0 < 1:
+            eclipse_b = 8
+        # mask will be used in OHEM
         mask[i, y0 - 1:y1, x0 - 1:x1] = 1
-        if eclipse_a * 2 / 16 >= 1 and eclipse_b * 2 / 16 >= 1:
+        # only keep those valid face which are bigger than one pixel
+        if eclipse_a * 2 / 16.0 >= 1 and eclipse_b * 2 / 16.0 >= 1:
             used_layer['big'].append(i)
         else:
             used_layer['tiney'].append(i)
@@ -142,6 +149,11 @@ def ground_truth_heat_map(size, box, vis=False):
             t = threading.Thread(target=defin_canv, args=(i, anno, canvas, mask, used_layer, w, h))
             result.append(t)
         for t in result:
+            while True:
+                # waiting for the num go down
+                # http://blog.csdn.net/jianhong1990/article/details/14671689
+                if len(threading.enumerate()) < total_thread:
+                    break
             t.setDaemon(True)  # https://www.cnblogs.com/fnng/p/3670789.html
             t.start()
         result[-1].join()
@@ -247,7 +259,12 @@ def gate_random_mask(mask, used_layer, Thread_fun):
             results.append(t)
     if not common:
         for t in results:
-            t.setDaemon(True)
+            while True:
+                # waiting for the num go down
+                # http://blog.csdn.net/jianhong1990/article/details/14671689
+                if len(threading.enumerate()) < total_thread:
+                    break
+            t.setDaemon(True)  # https://www.cnblogs.com/fnng/p/3670789.html
             t.start()
         results[-1].join()
 
@@ -263,7 +280,12 @@ def build_mask_withThread(W, H, masked, used_layer_now, Thread_fun):
         t = threading.Thread(target=Thread_fun, args=(W, H, masked, used_layer_now, j))
         result.append(t)
     for t in result:
-        t.setDaemon(True)
+        while True:
+            # waiting for the num go down
+            # http://blog.csdn.net/jianhong1990/article/details/14671689
+            if len(threading.enumerate()) < total_thread:
+                break
+        t.setDaemon(True)  # https://www.cnblogs.com/fnng/p/3670789.html
         t.start()
     result[-1].join()
 

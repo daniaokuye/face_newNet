@@ -15,14 +15,14 @@ def train():
     batch_size = 5  # images in every batch
     # snap_shot = 300
     # batch_iteration = 0
-    device_id = 1
-    model_place = '../output/my2/face_new__{}__model.pth'
+    device_id = 5  # 6 or 7
+    model_place = '../output/my3/face_new__{}__model.pth'
 
     net = wider_net()
     batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters
     cudnn.benchmark = True
     net = net.cuda(device_id)
-    use_skip = False  # for part connection of net,stop use tiny face in the beginning
+    use_skip = True  # for part connection of net,stop use tiny face in the beginning
 
     lr = 1e-2
     momentum = 0.9
@@ -42,10 +42,12 @@ def train():
         epoch_now = batch_iteration / epoch_size
         # if batch_iteration > 0:
         #     use_skip = True
+        # if epoch_now > 5:
+        #     use_skip = True
         if use_skip:
-            set_big(not use_skip)
+            set_big(use_skip)
         # learing rate decay
-        if batch_iteration != 0 and (epoch_now) % 5 == 0:
+        if batch_iteration != 0 and (epoch_now) % 3 == 0:
             for param_lr in optimizer.param_groups:
                 param_lr['lr'] /= 10
 
@@ -56,8 +58,8 @@ def train():
 
             predicted = net(img, use_skip)  # freeze tiny face
             # & skip
-            if batch_iteration % 1000 == 0:  # show the feature map
-                show_feature(predicted)
+            # if batch_iteration % 1000 == 0:  # show the feature map
+            #     show_feature(predicted)
 
             mask = prepare_prediction_with_mask(predicted, mask, used_layer)
             predicted = torch.mul(predicted, mask)  # only face will be penase or congrulation

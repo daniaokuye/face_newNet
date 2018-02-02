@@ -7,7 +7,7 @@ import numpy as np
 from torch.autograd import Variable
 from data_read import show_feature
 import matplotlib.pyplot as plt
-from cfg import get_status
+from cfg import get_status, total_thread
 from data_read import gate_random_mask
 
 
@@ -134,6 +134,7 @@ def prepare_prediction_with_mask(feature, mask, used_layer):
         multi_gtbox_in_used_layer(mask[layer], used_layer[name], draw_given_random_box_to_mask)
 
     # decide wheather both  big & tiney are all used in mask
+    # mask have two dimension big & tiney but shape is (1,2,h,w)
     mask = np.max(mask, axis=1) if use_skip else mask[:, 0]
     device_id = feature.get_device()
     mask = Variable(torch.from_numpy(mask)).unsqueeze(1).cuda(device_id)
@@ -163,7 +164,12 @@ def multi_gtbox_in_used_layer(mask, used_layer, aim_function):
         else:
             aim_function(used_layer[i], mask[which_mask])
     for t in res:
-        t.setDaemon(True)
+        while True:
+            # waiting for the num go down
+            # http://blog.csdn.net/jianhong1990/article/details/14671689
+            if len(threading.enumerate()) < total_thread:
+                break
+        t.setDaemon(True)  # https://www.cnblogs.com/fnng/p/3670789.html
         t.start()
     if is_multi_thred:
         res[-1].join()
@@ -171,15 +177,22 @@ def multi_gtbox_in_used_layer(mask, used_layer, aim_function):
 
 # this function was used for sort every item of random boxes
 def sort_solution_for_used_layer(individual, no_use):  # a list
+    for i in range(1, len(individual)):
+        if len(individual[i]) == 4:
+            continue
+        else:
+            try:
+                assert len(individual[i]) == 3
+            except Exception, e:
+                print e
+            individual[i].append(0)
     individual[1:] = sorted(individual[1:], key=lambda box: box[-1], reverse=True)
 
 
 def assign_score_by_given_sacle(W, H, feature, used_layer_, idx):
     # h, w = used_layer_[0]
     # idx=0 was origin box info h&w
-    if idx > 0:
-        if len(used_layer_[idx]) != 3:
-            print '*' * 5, 'this item: ', used_layer_, ' with idx: ', idx, '*' * 5
+    if idx > 0 and len(used_layer_[idx]) == 3:
         direction, x, y = used_layer_[idx]
         compose = np.array(((1, 1), (-1, 1), (-1, -1), (1, -1)))
         h_, w_ = np.array(used_layer_[0]) * compose[direction]

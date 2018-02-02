@@ -30,12 +30,12 @@ class wider_face(data.Dataset):
     def trans_img(self, data):
         trans = transform.Compose([
             transform.ToPILImage(),
-            transform.RandomHorizontalFlip(),
+            # transform.RandomHorizontalFlip(),
             transform.Lambda(jitter),
             transform.Resize((HW_h, HW_w)),
             transform.ToTensor(),
             transform.Normalize(mean=Norm_mean, std=Norm_std)
-        ])
+        ])  # be careful for flip
         data = trans(data)
         # show_data(data)
         return data
@@ -50,7 +50,7 @@ class wider_face(data.Dataset):
                 if not isinstance(i, int):
                     continue
                 if len(used_layer[i]) == 1:
-                    # remove this key
+                    # remove this key: no random box, invalid h or w
                     used_layer.pop(i)
                     continue
                 for j in range(len(used_layer[i])):
@@ -63,6 +63,8 @@ class wider_face(data.Dataset):
                         # direction, x, y
                         used_layer[i][j][1:] = \
                             [int(floor(x * y)) for x, y in zip(H_W_factor[::-1], used_layer[i][j][1:])]
+                if used_layer[i][0] == 0 or used_layer[i][1] == 0:
+                    used_layer.pop(i)
 
             # multi threading
             # is_multi_thred = False if len(used_layer.keys()) < 2 + 8 else True
