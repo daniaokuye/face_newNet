@@ -15,8 +15,8 @@ def train():
     batch_size = 5  # images in every batch
     # snap_shot = 300
     # batch_iteration = 0
-    device_id = 5  # 6 or 7
-    model_place = '../output/my3/face_new__{}__model.pth'
+    device_id = 6  # 6 or 7
+    model_place = '../output/my/face_new__{}__model.pth'
 
     net = wider_net()
     batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters

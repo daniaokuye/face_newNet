@@ -15,7 +15,7 @@ def validation():
     # snap_shot = 300
     # batch_iteration = 0
     device_id = 2
-    model_place = '../output/my2/face_new__{}__model.pth'
+    model_place = '../output/my/face_new__{}__model.pth'
 
     net = wider_net()
     batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters

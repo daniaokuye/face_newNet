@@ -14,7 +14,7 @@ import _init_paths
 from fast_rcnn.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from datasets.factory import get_imdb
 import datasets.imdb
-from cfg import stride_all, total_thread
+from cfg import stride_all, total_thread, HW_w, HW_h
 import argparse
 import cv2, PIL, time, os
 import matplotlib.pyplot as plt
@@ -101,19 +101,19 @@ def defin_canv(i, anno, canvas, mask, used_layer, w, h):
     # if big_now and not (eclipse_a * 2 / 16 >= 1 and eclipse_b * 2 / 16 >= 1):  # eclipse_a*2 / 16
     #     work = False
     if eclipse_b and eclipse_a:
-        # too little objects(face) will transform in gt as well as mask
-        if eclipse_a * 2 / 9.0 < 1:
-            eclipse_a = 8
-        if eclipse_b * 2 / 9.0 < 1:
-            eclipse_b = 8
+        # too little objects(face) will loc in tiney set: {}
+        C, H, W = mask.shape
+        H_W_factor = [1.0 * HW_h / H, 1.0 * HW_w / W]
+        width, heigth = (x * y * 2 for x, y in zip(H_W_factor, (eclipse_a, eclipse_b)))
         # mask will be used in OHEM
         mask[i, y0 - 1:y1, x0 - 1:x1] = 1
         # only keep those valid face which are bigger than one pixel
-        if eclipse_a * 2 / 16.0 >= 1 and eclipse_b * 2 / 16.0 >= 1:
+        if width / 16.0 >= 1 and heigth / 16.0 >= 1:
             used_layer['big'].append(i)
         else:
             used_layer['tiney'].append(i)
-        coor = (eclipse_b * 2, eclipse_a * 2)
+        # used_layer has record width & height as well as left top corner
+        coor = (eclipse_b * 2, eclipse_a * 2, x0, y0)
         used_layer[i] = [[int(np.ceil(c)) for c in coor]]
         eclipse = build_eclipse(x, y, eclipse_a, eclipse_b, (w, h))
         canvas[i] = mask[i] * eclipse
@@ -162,17 +162,22 @@ def ground_truth_heat_map(size, box, vis=False):
         for i, anno in enumerate(box):
             defin_canv(i, anno, canvas, mask, used_layer, w, h)
 
-    canvas = np.max(canvas, axis=0)
+    # canvas = np.max(canvas, axis=0)
     # mask = np.max(mask, axis=0)
+
     # generate mask for positive & negtive sample with default num_random_boxes =10
+    # all random box will be saved in used_layer.
+    # only left top corner will be saved
     gate_random_mask(np.max(mask, axis=0), used_layer, random_mask_generator)
-    # mask_ used for seen random negtive samples;
-    mask_ = draw_mask_with_usedLayer(mask, used_layer)
+
+    # mask_ used for visual random negtive samples;
+    # mask_ = draw_mask_with_usedLayer(mask, used_layer)
     mask = squeeze_mask(mask, used_layer)  # [big, tiney]
-    if vis:
-        fig, ax = plt.subplots()
-        ax.imshow(canvas)
-        cv2.imwrite('multi-face.png', (canvas * 255))
+    canvas = squeeze_mask(canvas, used_layer)
+    # if vis:
+    #     fig, ax = plt.subplots()
+    #     ax.imshow(canvas)
+    #     cv2.imwrite('multi-face.png', (canvas * 255))
     return canvas, mask, used_layer
 
 
@@ -226,7 +231,7 @@ def draw_mask_with_usedLayer(mask_, used_layer_):
         for idx in random_idx:
             patch = used_layer_[i][idx]
             x, y = patch[1:]
-            h_, w_ = np.array(used_layer_[i][0]) * compose[patch[0]]
+            h_, w_ = np.array(used_layer_[i][0][0:2]) * compose[patch[0]]
             a_y, b_y = (y, y + h_) if y < y + h_ else (y + h_, y)
             a_x, b_x = (x, x + w_) if (x < x + w_) else (x + w_, x)
             mask[a_y:b_y, a_x:b_x] = 2
@@ -292,7 +297,7 @@ def build_mask_withThread(W, H, masked, used_layer_now, Thread_fun):
 
 # randomly select parts
 def random_mask_generator(W, H, mask, box, idx):
-    h, w = box[0]
+    h, w, _, _ = box[0]
     anchor_x, anchor_y, direction, times = 0, 0, -1, 0
     while direction < 0 and times < 30:
         times += 1

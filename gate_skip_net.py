@@ -11,31 +11,43 @@ from cfg import get_status, total_thread
 from data_read import gate_random_mask
 
 
-class wider_net(nn.Module):
+class gate_skip_net(nn.Module):
     def __init__(self):
-        super(wider_net, self).__init__()
+        super(gate_skip_net, self).__init__()
+        self.trunk_layers = [1, 3]
         self.build_base()
-        self.up = nn.Upsample(scale_factor=2)
-        self.filter_1 = nn.Conv2d(1024, 256, 1)
-        self.filter_2 = nn.Conv2d(256, 1, 1)
-        self.maxp = nn.MaxPool2d(2, 2)
+
+        # self.up = nn.Upsample(scale_factor=2)
+        # self.filter_1 = nn.Conv2d(1024, 256, 1)
+        # self.filter_2 = nn.Conv2d(256, 1, 1)
+        # self.maxp = nn.MaxPool2d(2, 2)
 
     def forward(self, x, skip_conn=False):
-        # conv 4_3 =25;conv5_3=29
-        # z=x.clone()
         y = 0
-        z = []
+        # z = []
+        # layers = [64, 128, 256, 512, 512]  # 1 2 4 8 16
+        # out_layers = 20
+        # skip_NO = 0  # from 0 to the last skip connected point
         for k in range(len(self.base_net) - 1):  #
             # print 'k :', k, ' '
-            if isinstance(self.base_net[k], nn.BatchNorm2d):
-                print 'stop', k
+            # add skip connection before BN
+            # if isinstance(self.base_net[k], nn.BatchNorm2d):
+            #     # data
+            #     x_clone = x.clone()
+            #
+            #     #  embeded net in big net
+            #     input_layer = layers[skip_NO]
+            #     up_trunk_1 = nn.Conv2d(64, 20, 3)
+            #     up_trunk_2 = nn.Sigmoid()
+            #     down_trunk_1 = nn.Conv2d(64, 20, 1)
+            #     skip_NO += 1
 
             x = self.base_net[k](x)
-            z.append(torch.mean(x, 1).cpu().data.numpy())
+            # z.append(torch.mean(x, 1).cpu().data.numpy())
             if k == 31:
                 y = x
         if not isinstance(y, int):
-            x = self.up(x)
+            # x = self.up(x)
             if not skip_conn:
                 # zero = Variable(torch.FloatTensor([0]))
                 y = y * 0.0
@@ -47,39 +59,46 @@ class wider_net(nn.Module):
 
         return x
 
-    def add_extras(self):
+    def add_skip_connection(self, input_layer):
         """
-        add extra modules behind the net vgg
+        embeded skip connection net which located before pooling in big net
         """
-        fc6 = nn.Conv2d(512, 1024, 3, padding=1)
-        fc7 = nn.Conv2d(1024, 1024, 1)
-        conv8_1 = nn.Conv2d(1024, 256, 1)
-        conv8_2 = nn.Conv2d(256, 512, 3, 2, 1)  # s2
-        self.extra = nn.ModuleList([fc6, fc7, conv8_1, conv8_2])
+        out_layer = input_layer / 8
+        up_trunk_1 = nn.Conv2d(input_layer, out_layer, 3)
+        up_trunk_2 = nn.Sigmoid()
+        down_trunk_1 = nn.Conv2d(input_layer, out_layer, 1)
 
-    def weight_init(self, m):
-        init.xavier_uniform(m.weight.data)
-        init.constant(m.bias, 0.1)
+        feature2heatmap1 = nn.Conv2d(out_layer, out_layer * 8, 3)
+        feature2heatmap2 = nn.Conv2d(out_layer * 8, out_layer * 4, 3)
+        heatmap3 = nn.Conv2d(out_layer * 4, 1, 1)
+        return [up_trunk_1, up_trunk_2, down_trunk_1,
+                feature2heatmap1, feature2heatmap2, heatmap3]  # 3 & 3
 
     def build_base(self):
         """
         build base net VGG according to ssd
         """
-        base = []
+        base, main_fold, trunks = [], [], []
+        idx = 0
         vgg16 = models.vgg16(pretrained=True)
-        out_channel = 0
+        out_channel = 0  # vaiable to define BN & trunk
         for i, key in enumerate(vgg16.features):
-            if i < 30:
-                base.append(key)
-                if isinstance(key, nn.modules.Conv2d):
-                    out_channel = key.out_channels
-                if isinstance(key, nn.modules.activation.ReLU):
-                    base.append(nn.BatchNorm2d(out_channel))
-
-        self.base_net = nn.ModuleList(base)
-        # self.add_extras()
-        # for ex in self.extra:
-        #    ex.apply(self.weight_init)
+            if isinstance(key, nn.modules.Conv2d):
+                out_channel = key.out_channels
+            # BN then ReLu
+            if isinstance(key, nn.modules.activation.ReLU):
+                base.append(nn.BatchNorm2d(out_channel))
+            # add extra trunk before pooling
+            if isinstance(key, nn.MaxPool2d):
+                if idx in self.trunk_layers:
+                    trunk = self.add_skip_connection(out_channel)
+                    trunks.append(nn.Sequential(*trunk))
+                main_fold.append(nn.Sequential(*base))
+                base = []
+                idx += 1
+            base.append(key)
+        self.base_net = nn.ModuleList(main_fold)
+        self.trunk = nn.ModuleList(trunks)
 
 
 def load_saved(net, path):
@@ -219,7 +238,7 @@ def draw_given_random_box_to_mask(individual, mask):
     #         continue
     #     which_mask = 0 if i in big else 1
     num = nums_mask if len(individual) > nums_mask else len(individual) - 1
-
+    context = 2  # slice is 1, then its context is context-1=1
     for idx in range(num):
         index = idx + 1
         patch = individual[index]
@@ -227,10 +246,12 @@ def draw_given_random_box_to_mask(individual, mask):
         x, y = patch[1:3]
         a_y, b_y = (y, y + h_) if y < y + h_ else (y + h_, y)
         a_x, b_x = (x, x + w_) if (x < x + w_) else (x + w_, x)
-        mask[a_y:b_y + 1, a_x:b_x + 1] = 2
+        # 1 is this noisy should be; else (gt 1) will penalize those points
+        mask[a_y:b_y + context, a_x:b_x + context] = 1.5
     # return mask
     # print 'o'
 
 
 if __name__ == "__main__":
-    pass
+    net = gate_skip_net()
+    print 'o'
