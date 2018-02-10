@@ -1,6 +1,6 @@
 # this fucntion together with newnet.py
 # are used for loading data & ground truth
-import torch, cv2, time, threading
+import torch, cv2, copy  # , time, threading
 import torch.utils.data as data
 import torchvision.transforms as transform
 from data_read import combined_roidb, obtain_data, jitter
@@ -20,104 +20,77 @@ class wider_face(data.Dataset):
     def __getitem__(self, item):
         # there are 2 dims for gt_map & mask
         image, gt_map, mask, used_layer = obtain_data(self.imdb, item)
-        # stride=8 resize
-        image = self.trans_img(image)  # FloatTensor
-        # t = time.time()
-        gt_map = self.trans_gt(gt_map, used_layer)  # FloatTensor gt_map:h*w without third dimension
-        # print 'with used_layer: ', time.time() - t
-        mask = self.trans_gt(mask)
-        return image, torch.from_numpy(gt_map), mask, used_layer
+        image = self.trans_img(image)
+        gt_map = self.trans_gt(gt_map)
+        mask = self.trans_mask(mask)
+        used_layer = self.trans_layer(gt_map, used_layer)
+        return image, gt_map, mask, used_layer
 
     def trans_img(self, data):
         trans = transform.Compose([
             transform.ToPILImage(),
-            # transform.RandomHorizontalFlip(),
             transform.Lambda(jitter),
             transform.Resize((HW_h, HW_w)),
             transform.ToTensor(),
             transform.Normalize(mean=Norm_mean, std=Norm_std)
-        ])  # be careful for flip
+        ])
         data = trans(data)
         # show_data(data)
         return data
 
-    def trans_gt(self, gt, used_layer=0):
-        # this factor will used in prepare ground truth & mask
-        total_stride = 1  # 8
-        C, H, W = gt.shape if len(gt.shape) == 3 else [1] + list(gt.shape)
-        if isinstance(used_layer, dict):
-            # used_layer has four nums now: width,height,left, top
-            H_W_factor = [1.0 * HW_h / (H * total_stride), 1.0 * HW_w / (W * total_stride)]  # *8
-
-            # origin
-            for i in used_layer.keys():
-                if not isinstance(i, int):
-                    continue
-                if len(used_layer[i]) == 1:
-                    # remove this key: no random box, invalid h or w
-                    used_layer.pop(i)
-                    continue
-                for j in range(len(used_layer[i])):
-                    if j == 0:
-                        used_layer[i][0] = [int(round(x * y)) for x, y in
-                                            zip(H_W_factor + H_W_factor[::-1], used_layer[i][0])]
-                        # h = h if h > 0 else 1
-                        # w = w if w > 0 else 1
-                        # used_layer[i][0] = [h, w]
-                    else:
-                        # direction, x, y
-                        used_layer[i][j][1:] = \
-                            [int(round(x * y)) for x, y in zip(H_W_factor[::-1], used_layer[i][j][1:])]
-                # if used_layer[i][0] == 0 or used_layer[i][1] == 0:
-                #     used_layer.pop(i)
-
-            # multi threading
-            # is_multi_thred = False if len(used_layer.keys()) < 2 + 8 else True
-            # res = []
-            # for i in used_layer.keys():
-            #     if not isinstance(i, int):
-            #         continue
-            #     if is_multi_thred:
-            #         t = threading.Thread(target=trans_used_layer,
-            #                              args=(H_W_factor, used_layer[i]))
-            #         res.append(t)
-            #     else:
-            #         trans_used_layer(H_W_factor, used_layer[i])
-            # for t in res:
-            #     t.setDaemon(True)
-            #     t.start()
-            # if is_multi_thred:
-            #     res[-1].join()
-
-        # total stride equals 8
-        if C == 1:
-            Sample_LINEAR = cv2.resize(gt, (HW_h / total_stride, HW_w / total_stride),
-                                       interpolation=cv2.INTER_LINEAR)
-            Sample_near = cv2.resize(gt, (HW_h / total_stride, HW_w / total_stride),
-                                     interpolation=cv2.INTER_NEAREST)
-            Sample_near = (Sample_near > 0).astype(Sample_LINEAR.dtype)
-            gt = Sample_LINEAR * Sample_near
-        else:
-            res = []
-            for i in range(C):
-                Sample_ = cv2.resize(gt[i], (HW_h / total_stride, HW_w / total_stride),
-                                     interpolation=cv2.INTER_NEAREST)
-                res.append((Sample_)[np.newaxis])
-            gt = np.vstack(res)
+    def trans_mask(self, mask_):
+        gt = mask_.transpose(1, 2, 0)
+        gt = cv2.resize(gt, (HW_w, HW_h),
+                        interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+        # gt = gt[:, np.newaxis]
         return gt
 
+    def trans_gt(self, gt_):
+        gt = gt_.transpose(1, 2, 0)
+        gt_LINEAR = cv2.resize(gt, (HW_w, HW_h),
+                               interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+        gt_NEAR = cv2.resize(gt, (HW_w, HW_h),
+                             interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
+        gt_NEAR = (gt_NEAR > 0).astype(gt_LINEAR.dtype)
+        gt = gt_LINEAR * gt_NEAR
+        return gt
 
-def trans_used_layer(H_W_factor, this_used_layer):
-    for j in range(len(this_used_layer)):
-        if j == 0:
-            # h, w
-            this_used_layer[0] = [int(ceil(x * y)) for x, y in zip(H_W_factor + H_W_factor[::-1], this_used_layer[0])]
-        else:
-            # direction, x, y
-            this_used_layer[j][1:] = \
-                [int(floor(x * y)) for x, y in zip(H_W_factor[::-1], this_used_layer[j][1:])]
+    def trans_layer(self, gt, used_layer_):
+        total_stride = 1  # 8
+        C, H, W = gt.shape if len(gt.shape) == 3 else [1] + list(gt.shape)
+        H_W_factor = [1.0 * HW_h / (H * total_stride), 1.0 * HW_w / (W * total_stride)]
+        used_layer = trans_used_layer(used_layer_, H_W_factor)
+        return used_layer
 
 
+def trans_used_layer(used_layer_, H_W_factor):
+    # this factor will used in prepare ground truth & mask
+    used_layer = copy.deepcopy(used_layer_)
+
+    # used_layer has four nums now: width,height,left, top
+    #
+    # origin
+    for i in used_layer.keys():
+        if not isinstance(i, int):
+            continue
+        if len(used_layer[i]) == 1:
+            # remove this key: no random box, invalid h or w
+            used_layer.pop(i)
+            continue
+        for j in range(len(used_layer[i])):
+            if j == 0:
+                used_layer[i][0] = [int(round(x * y)) for x, y in
+                                    zip(H_W_factor + H_W_factor[::-1], used_layer[i][0])]
+            else:
+                # direction, x, y
+                used_layer[i][j][1:] = \
+                    [int(round(x * y)) for x, y in zip(H_W_factor[::-1], used_layer[i][j][1:])]
+    return used_layer
+
+
+#
+# -----------------------------------------------------------
+#
 def show_data(img):
     """
     just for show, there are nothing usage
@@ -147,11 +120,13 @@ def patch_data(batch):
     for i, patch in enumerate(batch):
         input, target, mk, use = patch
         img.append(input)
-        gt.append(target)  # torch.unsqueeze(target, 0)
+        # gt.append(target)  # torch.unsqueeze(target, 0)
+        gt.append(target[np.newaxis])
         mask.append(mk[np.newaxis])
         used_layer[keys.format(i)] = use
     img = torch.stack(img, 0)
-    gt = torch.stack(gt, 0)  # .unsqueeze(1)  # batch,1,h,w
+    # gt = torch.stack(gt, 0)  # .unsqueeze(1)  # batch,1,h,w
+    gt = np.vstack(gt)
     mask = np.vstack(mask)  # .unsqueeze(1)
     return img, gt, mask, used_layer
 

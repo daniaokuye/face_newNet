@@ -19,3 +19,27 @@ def set_big(status):
 
 def get_status():
     return Global_var.use_skip
+
+
+#//////////////////////////////////////////
+
+# if used_layer[i][0] == 0 or used_layer[i][1] == 0:
+#     used_layer.pop(i)
+
+# multi threading
+# is_multi_thred = False if len(used_layer.keys()) < 2 + 8 else True
+# res = []
+# for i in used_layer.keys():
+#     if not isinstance(i, int):
+#         continue
+#     if is_multi_thred:
+#         t = threading.Thread(target=trans_used_layer,
+#                              args=(H_W_factor, used_layer[i]))
+#         res.append(t)
+#     else:
+#         trans_used_layer(H_W_factor, used_layer[i])
+# for t in res:
+#     t.setDaemon(True)
+#     t.start()
+# if is_multi_thred:
+#     res[-1].join()

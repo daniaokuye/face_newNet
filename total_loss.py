@@ -3,28 +3,44 @@ import cv2
 import numpy as np
 import torch
 from torch.autograd import Variable
+from net import prepare_prediction_with_mask
+from data_prepare import trans_used_layer
 
 
 class loss_detection(nn.Module):
     def __init__(self):
+        """
+       heatmap: heatmap of face; numpy; 800*800
+       predicted: conv4_3 & conv5_3 concat and filter
+       gt: points of boxes
+       """
         super(loss_detection, self).__init__()
         self.MSE = nn.MSELoss()
         self.smL1 = nn.SmoothL1Loss()
+        self.layers = [1, 3, 4]
 
-    def forward(self, heatmap, predicted):  # , gt
-        """
+    def forward(self, predicted, heatmap, mask, used_layer):
+        # loss=Variable(torch.zeros(1))
+        predict, trunk = predicted
+        device_id = trunk.get_device()
+        for i, trunk_out in enumerate(predict):
+            k = self.layers[i]
+            mask_i = self.np_resize(mask, k)
+            heatmap_i = self.np_resize(heatmap, k)
+            used_layer_i = trans_used_layer(used_layer, [1.0 / (2 ** k), 1.0 / (2 ** k)])
 
-        :param heatmap: heatmap of face
-        :param predicted: conv4_3 & conv5_3 concat and filter
-        :param gt: points of boxes
-        :return:
-        """
-        # heatmap = Variable(heatmap).cuda()
-        l = self.MSE(predicted, heatmap)
-        return l
+            mask_i = prepare_prediction_with_mask(trunk_out, mask_i, used_layer_i)
+            trunk_out = torch.mul(trunk_out, mask_i)
+            heatmap_i = Variable(torch.from_numpy(heatmap_i)).cuda(self.device_id)
+            trunk += self.MSE(trunk_out, heatmap_i)
+        return trunk
 
-    def map2point(self, heatmap, gt):
-        pass
+    def np_resize(self, img_, ratio):
+        batch, _, h, w = img_.shape
+        gt = img_.transpose(2, 3, 0, 1)
+        gt = cv2.resize(gt, (w / (2 ** ratio), h / (2 ** ratio)),
+                        interpolation=cv2.INTER_NEAREST).transpose(2, 3, 0, 1)
+        return gt
 
 
 def test_map():

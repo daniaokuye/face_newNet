@@ -127,11 +127,13 @@ def get_param(net, lr):
     return params
 
 
+# ----------------------  O H E M  -------------------------------------
+#
 # prepare prediction with mask aidding by used_layer
 # feature [n*1*h*w], mask [n*2*h*w]--[big, tiney]
 def prepare_prediction_with_mask(feature, mask, used_layer):
     # mask_ = mask.copy()
-    use_skip = get_status()
+    # use_skip = get_status()
     for name in used_layer.keys():
         layer = int(name.split('batch_')[-1])
         gate_random_mask(feature[layer, 0], used_layer[name], assign_score_by_given_sacle)
@@ -142,9 +144,9 @@ def prepare_prediction_with_mask(feature, mask, used_layer):
 
     # decide wheather both  big & tiney are all used in mask
     # mask have two dimension big & tiney but shape is (1,2,h,w)
-    mask = np.max(mask, axis=1) if use_skip else mask[:, 0]
+    # mask = np.max(mask, axis=1) if use_skip else mask[:, 0]
     device_id = feature.get_device()
-    mask = Variable(torch.from_numpy(mask)).unsqueeze(1).cuda(device_id)
+    mask = Variable(torch.from_numpy(mask)).cuda(device_id)  # .unsqueeze(1)
     return mask
 
 

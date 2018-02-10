@@ -5,6 +5,7 @@ import torch.backends.cudnn as cudnn
 import time
 from data_prepare import *
 from net import *
+from gate_skip_net import gate_skip_net
 from total_loss import loss_detection
 from data_read import show_feature
 from cfg import set_big
@@ -18,11 +19,14 @@ def train():
     device_id = 6  # 6 or 7
     model_place = '../output/my/face_new__{}__model.pth'
 
-    net = wider_net()
-    batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters
+    # net = wider_net()
+    # batch_iteration = load_saved(net, model_place)  # load those snap shot model parameters
+    net = gate_skip_net()
+    batch_iteration = 0
+
     cudnn.benchmark = True
     net = net.cuda(device_id)
-    use_skip = True  # for part connection of net,stop use tiny face in the beginning
+    use_skip = False  # for part connection of net,stop use tiny face in the beginning
 
     lr = 1e-2
     momentum = 0.9
@@ -56,7 +60,8 @@ def train():
             gt_heatmap = Variable(gt_heatmaps).cuda(device_id)
             # mask = Variable(mask).cuda(device_id)
 
-            predicted = net(img, use_skip)  # freeze tiny face
+            # predicted = net(img, use_skip)  # freeze tiny face
+            predicted = net(img, gt_heatmap)
             # & skip
             # if batch_iteration % 1000 == 0:  # show the feature map
             #     show_feature(predicted)
