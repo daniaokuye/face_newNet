@@ -136,6 +136,7 @@ def prepare_prediction_with_mask(feature, mask, used_layer):
     # use_skip = get_status()
     for name in used_layer.keys():
         layer = int(name.split('batch_')[-1])
+        # feature is the predicted result,so it has same dimension with ground truth
         gate_random_mask(feature[layer, 0], used_layer[name], assign_score_by_given_sacle)
         # sort every items in every content in batch
         multi_gtbox_in_used_layer(mask[layer], used_layer[name], sort_solution_for_used_layer)
@@ -204,11 +205,16 @@ def assign_score_by_given_sacle(W, H, feature, used_layer_, idx):
     if idx > 0 and len(used_layer_[idx]) == 3:
         direction, x, y = used_layer_[idx]
         compose = np.array(((1, 1), (-1, 1), (-1, -1), (1, -1)))
-        h_, w_ = np.array(used_layer_[0]) * compose[direction]
+        # used layer: width & height; left top corner
+        h_, w_ = np.array(used_layer_[0][:2]) * compose[direction]
         a_y, b_y = (y, y + h_) if y < y + h_ else (y + h_, y)
         a_x, b_x = (x, x + w_) if (x < x + w_) else (x + w_, x)
-        score = torch.sum(feature[a_y:b_y + 1, a_x:b_x + 1])  # a number in Variable GPU
-        used_layer_[idx].append(score.cpu().data.numpy()[0])
+        try:
+            score = torch.sum(feature[a_y:b_y + 1, a_x:b_x + 1])  # a number in Variable GPU
+            used_layer_[idx].append(score.cpu().data.numpy()[0])
+        except Exception, e:
+            # print e
+            pass
 
 
 def draw_given_random_box_to_mask(individual, mask):
@@ -225,7 +231,8 @@ def draw_given_random_box_to_mask(individual, mask):
     for idx in range(num):
         index = idx + 1
         patch = individual[index]
-        h_, w_ = np.array(individual[0]) * compose[patch[0]]
+        # individual[0]:width & height ; left top corner
+        h_, w_ = np.array(individual[0][0:2]) * compose[patch[0]]
         x, y = patch[1:3]
         a_y, b_y = (y, y + h_) if y < y + h_ else (y + h_, y)
         a_x, b_x = (x, x + w_) if (x < x + w_) else (x + w_, x)

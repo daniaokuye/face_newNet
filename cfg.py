@@ -6,6 +6,7 @@ Norm_std = [0.229, 0.224, 0.225]
 stride_all = 8
 # sleep_time = 0.5
 total_thread = 1000  # total number of threading
+pixels_size = 32.0  # pixels to differ big or tiny
 
 
 class Global_var():
@@ -20,8 +21,7 @@ def set_big(status):
 def get_status():
     return Global_var.use_skip
 
-
-#//////////////////////////////////////////
+# //////////////////////////////////////////
 
 # if used_layer[i][0] == 0 or used_layer[i][1] == 0:
 #     used_layer.pop(i)

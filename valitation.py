@@ -5,7 +5,7 @@ import torch.backends.cudnn as cudnn
 import time
 from data_prepare import *
 from net import *
-from gate_skip_net import gate_skip_net, load_parameter
+from gate_skip_net import gate_skip_net, load_parameter, chunk_gate_net
 from total_loss import loss_detection
 from data_read import show_feature
 
@@ -37,7 +37,7 @@ def validation():
 
     dataset = wider_face('test')
     epoch_size = len(dataset) / batch_size
-    data_loader = data.DataLoader(dataset, batch_size=2, shuffle=True, num_workers=0,
+    data_loader = data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0,
                                   pin_memory=True, drop_last=True, collate_fn=patch_data)
 
     # while batch_iteration < (epoch * epoch_size):
@@ -50,18 +50,23 @@ def validation():
     iters = 0
     for imgs, gt_heatmaps, mask, used_layer in data_loader:
         t = time.time()
+        epoch_now = batch_iteration / epoch_size
+        if epoch_now > 5:
+            # skip = True
+            pass
         if skip:
             set_big(skip)
         img = Variable(imgs, requires_grad=True).cuda(device_id)
         # gt_heatmap = Variable(gt_heatmaps).cuda(device_id)
         # mask = Variable(mask).cuda(device_id)
-
         # predicted = net(img, skip)  # freeze tiny face
-        predicted = net(img, gt_heatmaps)
+        scores = chunk_gate_net(gt_heatmaps)
+        predicted = net(img, scores)
         # & skip
         # if iters % 1000 == 0:  # show the feature map
-        # show_feature(predicted)
-        # show_feature(img, True)
+        for fi in predicted[0]:
+            show_feature(fi)
+        show_feature(img, True)
         # t00 = time.time()
         # mask = prepare_prediction_with_mask(predicted, mask, used_layer)
         # # print 'with used_layer: ', time.time() - t00
@@ -74,10 +79,10 @@ def validation():
         optimizer.step()
 
         # total n
-        tn = reduce(lambda x, y: x * y, predicted.size())
-        loss_now = l * tn / (torch.sum(mask) + 1)
+        # tn = reduce(lambda x, y: x * y, predicted[0].size())
+        # loss_now = l * tn / (torch.sum(mask) + 1)
         print 'loss is: {:.3f},and iter is {} with time {}'. \
-            format(loss_now.data[0], iters, time.time() - t)
+            format(l.data[0], iters, time.time() - t)
         # todo:vis score & save parameters
         iters += 1
 

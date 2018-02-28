@@ -14,7 +14,7 @@ import _init_paths
 from fast_rcnn.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from datasets.factory import get_imdb
 import datasets.imdb
-from cfg import stride_all, total_thread, HW_w, HW_h
+from cfg import stride_all, total_thread, HW_w, HW_h, pixels_size
 import argparse
 import cv2, PIL, time, os
 import matplotlib.pyplot as plt
@@ -108,7 +108,7 @@ def defin_canv(i, anno, canvas, mask, used_layer, w, h):
         # mask will be used in OHEM
         mask[i, y0 - 1:y1, x0 - 1:x1] = 1
         # only keep those valid face which are bigger than one pixel
-        if width / 16.0 >= 1 and heigth / 16.0 >= 1:
+        if width / pixels_size >= 1 and heigth / pixels_size >= 1:
             used_layer['big'].append(i)
         else:
             used_layer['tiney'].append(i)
@@ -356,7 +356,7 @@ def show_feature(data_, RGB=False):
     print 'min of feature map: ', minD
     data = (data - minArr) / (maxArr - minArr) * 255
     data = data.astype(np.uint8)
-    show_inx = np.random.randint(b)
+    show_inx = 0  # np.random.randint(b)
     if RGB:
         im = Image.fromarray(data[show_inx].transpose(1, 2, 0))
     else:

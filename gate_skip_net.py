@@ -2,6 +2,7 @@ import os, time, cv2
 import torch, threading
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as f
 import torchvision.models as models
 import numpy as np
 from torch.autograd import Variable
@@ -11,20 +12,20 @@ from cfg import get_status, total_thread
 from data_read import gate_random_mask
 
 
+def score_fn(*argus):
+    pass
+
+
 class gate_skip_net(nn.Module):
     def __init__(self):
         super(gate_skip_net, self).__init__()
         self.trunk_layers = [1, 3]
+        self.gamma = 5  # for sigmoid
         self.build_base()
-        num_of_trunk = len(self.trunk_layers)
-        self.bias_trunk = Variable(torch.FloatTensor(num_of_trunk))
-        # self.up = nn.Upsample(scale_factor=2)
-        # self.filter_1 = nn.Conv2d(1024, 256, 1)
-        # self.filter_2 = nn.Conv2d(256, 1, 1)
-        # self.maxp = nn.MaxPool2d(2, 2)
 
-    def forward(self, x, canvas):
+    def forward(self, x, scores_fn=score_fn()):  # canvas
         Is_use_skip = get_status()  # False
+        # big, tiny = canvas_big_tiny(canvas, x.get_device())
         trunk_out = []  # result from trunk
         tiny_out = Variable(torch.zeros(1)).cuda(x.get_device())
         for k in range(len(self.base_net)):
@@ -35,18 +36,20 @@ class gate_skip_net(nn.Module):
                 continue
             # trunk
             if Is_use_skip:
-                trunk_out.append(self.trunk_net[idx](x))
+                sf = self.tiny_net_for_fliter(x, idx)
             else:
+                # This part will not be used in test phase
+                skip_out = self.tiny_net_for_fliter(x.detach(), idx)  # train tiney net in net
                 # selected features -- at this point, we want bp to main trunk -- .detach()
-                sf = self.score_feature_map(canvas, k, self.trunk_net[idx][0].out_channels, x)
-                tiny_out += self.tiny_net_for_fliter(x, sf, idx)
+                sf = scores_fn(k, self.trunk_net[idx][2].out_channels, x)
+                # todo:ground truth should be follow big & tiny
+                tiny_out += f.l1_loss(skip_out, sf)
 
-                for i, branch in enumerate(self.trunk_net[idx]):
-                    if i < self.fliter_length:
-                        continue
-                    sf = branch(sf)
-                trunk_out.append(sf)
-        return trunk_out.append(x), tiny_out  # 1.3.4
+            sf = self.trunk_net[idx][3](sf)
+            trunk_out.append(sf)
+        # todo:simplify.big & tiny switch can move to loss, but it increase the calculation
+        trunk_out.append(x)
+        return trunk_out, tiny_out  # 1.3.4
 
     def add_skip_connection(self, input_layer):
         """
@@ -56,18 +59,23 @@ class gate_skip_net(nn.Module):
         fliter_part, feature_part = [], []
 
         # fliter_part
-        fliter_part.append(nn.Conv2d(input_layer, out_layer, 3))  # up_trunk_1
-        fliter_part.append(nn.BatchNorm2d(out_layer))  # nn.Linear(out_layer, out_layer)
+        fliter_part.append(nn.Conv2d(input_layer, input_layer, 3, padding=1))  # up_trunk_1
+        # fliter_part.append(nn.BatchNorm2d(input_layer))
+        fliter_part.append(L2Norm(input_layer, self.gamma))
         fliter_part.append(nn.Sigmoid())  # up_trunk_2
-        fliter_part.append(nn.Conv2d(input_layer, out_layer, 1))  # down_trunk_1
-        self.fliter_length = len(fliter_part)
+        # fliter_part.append(nn.ReLU())
+        upper = nn.Sequential(*fliter_part)
+        lower_1 = nn.Conv2d(input_layer, input_layer, 3, padding=1)
+        lower_2 = nn.Conv2d(input_layer, out_layer, 1)
 
         # feature_part
-        feature_part.append(nn.Conv2d(out_layer, out_layer * 8, 3))  # feature2heatmap1
-        feature_part.append(nn.Conv2d(out_layer * 8, out_layer * 4, 3))  # feature2heatmap2
+        feature_part.append(nn.Conv2d(out_layer, out_layer * 8, 3, padding=1))  # feature2heatmap1
+        feature_part.append(nn.Conv2d(out_layer * 8, out_layer * 4, 3, padding=1))  # feature2heatmap2
         feature_part.append(nn.Conv2d(out_layer * 4, 1, 1))  # heatmap3
+        feature_part.append(nn.ReLU())  # relu
+        supply = nn.Sequential(*feature_part)
 
-        return fliter_part + feature_part
+        return nn.ModuleList([upper, lower_1, lower_2, supply])
 
     def build_base(self):
         """
@@ -92,22 +100,49 @@ class gate_skip_net(nn.Module):
                 base = []
                 idx += 1
             base.append(key)
+        main_fold.append(nn.Sequential(*self.add_extras(out_channel)))
         self.base_net = nn.ModuleList(main_fold)
         self.trunk_net = nn.ModuleList(trunks)
 
-    def score_feature_map(self, gt_, resize_ratio, k, feature):
+    def add_extras(self, out_channels):
         """
-        get score from feature
+        add extra modules behind the net vgg
+        """
+        fc6 = nn.Conv2d(out_channels, out_channels / 2, 1)
+        fc7 = nn.Conv2d(out_channels / 2, 1, 1)
+        return [fc6, fc7]
+
+    def tiny_net_for_fliter(self, trunk, trunk_layer):
+        # todo: tiny net, net in net
+        # t = trunk.detach()  # trunk; x.clone()
+        # trunk.requires_grad = True
+        fliter = self.trunk_net[trunk_layer][0](trunk)  # upper
+        fliter = nn.ReLU()(fliter - 0.5)
+        transfer = self.trunk_net[trunk_layer][1](trunk)  # lower_1
+        transfer = torch.mul(transfer, fliter)
+        transfer = self.trunk_net[trunk_layer][2](transfer)  # select
+        return transfer
+
+
+def chunk_gate_net(gt_):
+    def score_feature_map(resize_ratio, k, feature):
+        """gt_,
+        get score from feature; This function will be used in gate_net
         :param gt_: numpy array
         :param resize_ratio: resize to feature
         :param k: top k
         :param feature: used for score sort
         :return:
         """
+        # todo:if there's no tiney face or big face, this function should be a switch
         batch, _, h, w = gt_.shape
         gt = gt_[:, 1].transpose(1, 2, 0)
         gt = cv2.resize(gt, (w / (2 ** resize_ratio), h / (2 ** resize_ratio)),
-                        interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+                        interpolation=cv2.INTER_NEAREST)
+        if batch == 1:
+            gt = gt[np.newaxis]
+        else:
+            gt = gt.transpose(2, 0, 1)
         gt = gt[:, np.newaxis]  # at this moment, gt has same dimensions with gt_
         mask = (Variable(torch.from_numpy(gt)) > 0).float()  # tiney face
         mask = mask.cuda(feature.get_device())
@@ -119,20 +154,25 @@ class gate_skip_net(nn.Module):
         for i in range(batch):
             res.append(feature[i][idx[i]])
         res = torch.stack(res)
-        return res  # .detach()
+        _, tiny = canvas_big_tiny(gt_, feature.get_device())
+        return torch.mul(tiny, res)
 
-    def tiny_net_for_fliter(self, trunk, selected_feature, trunk_layer):
-        idx = trunk_layer
-        # todo: tiny net, net in net
-        t = trunk.detach()  # trunk; x.clone()
-        fliter = self.trunk_net[idx][0](t)  # conv
-        fliter = self.trunk_net[idx][1](fliter)  # linear
-        fliter = self.trunk_net[idx][2](fliter)  # sigmoid
-        t = self.trunk_net[idx][2](t)
-        fliter = (fliter > 0).float()
-        t = torch.mul(t, fliter)
-        # similiar(t,sf)
-        return nn.functional.l1_loss(t, selected_feature)
+    return score_feature_map
+
+
+def canvas_big_tiny(canvas, cuda_idx):
+    # to obtain status of canvas which is numpy array
+    c = canvas.copy()
+    for i in range(3, 1, -1):
+        c = np.sum(c, i)
+    c = (c > 0).astype(np.float32)
+    big, tiny = c[:, 0], c[:, 1]
+    big = Variable(torch.from_numpy(big)).cuda(cuda_idx)
+    tiny = Variable(torch.from_numpy(tiny)).cuda(cuda_idx)
+    for i in range(3):
+        big = big.unsqueeze(-1)
+        tiny = tiny.unsqueeze(-1)
+    return big, tiny
 
 
 def load_parameter(net, path):
@@ -152,17 +192,6 @@ def load_saved_model(net, files):
     saved_data = torch.load(files)
     saved_state = saved_data['net_state']
     net.load_state_dict(saved_state)
-
-    # in case of module data parallel was used
-    # if 'module' in saved_state.keys()[0]:
-    #     from collections import OrderedDict
-    #     trans_param = OrderedDict()
-    #     for item, value in saved_state.items():
-    #         name = '.'.join(item.split('.')[1:])
-    #         trans_param[name] = value
-    #     net.load_state_dict(trans_param)
-    # else:
-
     now_iter = saved_data['iter']
     return now_iter
 
@@ -181,13 +210,31 @@ def have_valid_model_parameter(path):
 
 
 def init_uniform_parameters(net):
-    for m in net:
+    for name, m in net.named_modules():
         if isinstance(m, nn.Conv2d):
             init.constant(m.bias, 0.1)
             init.xavier_uniform(m.weight.data)
-        elif isinstance(m, nn.Linear):
-            init.constant(m.bias, 4.0)
-            init.xavier_uniform(m.weight.data)
+        # elif 'trunk' in name and isinstance(m, nn.BatchNorm2d):
+        #     init.constant(m.weight, 4.0)
+        #     init.xavier_uniform(m.weight.data)
+
+
+class L2Norm(nn.Module):
+    def __init__(self, n_channels, scale):
+        super(L2Norm, self).__init__()
+        self.gamma = scale or None
+        self.eps = 1e-10
+        self.weight = nn.Parameter(torch.FloatTensor(n_channels))
+        self.reset_parameter()
+
+    def reset_parameter(self):
+        init.constant(self.weight, self.gamma)
+
+    def forward(self, x):
+        norm = x.pow(2).sum(dim=1, keepdim=True).sqrt() + self.eps
+        x = torch.div(x, norm)
+        out = self.weight.unsqueeze(0).unsqueeze(2).unsqueeze(3) * x
+        return out
 
 
 if __name__ == "__main__":

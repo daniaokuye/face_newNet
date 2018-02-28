@@ -20,10 +20,10 @@ class wider_face(data.Dataset):
     def __getitem__(self, item):
         # there are 2 dims for gt_map & mask
         image, gt_map, mask, used_layer = obtain_data(self.imdb, item)
+        self.trans_layer(gt_map, used_layer)  # used_layer =
         image = self.trans_img(image)
-        gt_map = self.trans_gt(gt_map)
-        mask = self.trans_mask(mask)
-        used_layer = self.trans_layer(gt_map, used_layer)
+        gt_map = trans_gt(gt_map)
+        mask = trans_mask(mask)
         return image, gt_map, mask, used_layer
 
     def trans_img(self, data):
@@ -38,34 +38,54 @@ class wider_face(data.Dataset):
         # show_data(data)
         return data
 
-    def trans_mask(self, mask_):
-        gt = mask_.transpose(1, 2, 0)
-        gt = cv2.resize(gt, (HW_w, HW_h),
-                        interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
-        # gt = gt[:, np.newaxis]
-        return gt
-
-    def trans_gt(self, gt_):
-        gt = gt_.transpose(1, 2, 0)
-        gt_LINEAR = cv2.resize(gt, (HW_w, HW_h),
-                               interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
-        gt_NEAR = cv2.resize(gt, (HW_w, HW_h),
-                             interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
-        gt_NEAR = (gt_NEAR > 0).astype(gt_LINEAR.dtype)
-        gt = gt_LINEAR * gt_NEAR
-        return gt
-
     def trans_layer(self, gt, used_layer_):
         total_stride = 1  # 8
         C, H, W = gt.shape if len(gt.shape) == 3 else [1] + list(gt.shape)
         H_W_factor = [1.0 * HW_h / (H * total_stride), 1.0 * HW_w / (W * total_stride)]
-        used_layer = trans_used_layer(used_layer_, H_W_factor)
-        return used_layer
+        trans_used_layer(used_layer_, H_W_factor)
+        # used_layer = trans_used_layer(used_layer_, H_W_factor)
+        # return used_layer
 
 
-def trans_used_layer(used_layer_, H_W_factor):
+def trans_gt(gt_, *ratio):
+    if ratio:
+        w_ratio, h_ratio = ratio
+    else:
+        w_ratio, h_ratio = 1, 1
+    # c, _, _ = gt_.shape
+    gt = gt_.transpose(1, 2, 0)
+    gt_LINEAR = cv2.resize(gt, (HW_w / w_ratio, HW_h / h_ratio),
+                           interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+    gt_NEAR = cv2.resize(gt, (HW_w / w_ratio, HW_h / h_ratio),
+                         interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
+    gt_NEAR = (gt_NEAR > 0).astype(gt_LINEAR.dtype)
+    gt = gt_LINEAR * gt_NEAR
+    # if c == 1:
+    #     gt = gt[np.newaxis]
+    # else:
+    #     gt = gt.transpose(2, 0, 1)
+    return gt
+
+
+def trans_mask(mask_, *ratio):
+    if ratio:
+        w_ratio, h_ratio = ratio
+    else:
+        w_ratio, h_ratio = 1, 1
+    # c, _, _ = mask_.shape
+    gt = mask_.transpose(1, 2, 0)
+    gt = cv2.resize(gt, (HW_w / w_ratio, HW_h / h_ratio),
+                    interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+    # if c == 1:
+    #     gt = gt[np.newaxis]
+    # else:
+    #     gt = gt.transpose(2, 0, 1)
+    return gt
+
+
+def trans_used_layer(used_layer, H_W_factor):
     # this factor will used in prepare ground truth & mask
-    used_layer = copy.deepcopy(used_layer_)
+    # used_layer = copy.deepcopy(used_layer_)
 
     # used_layer has four nums now: width,height,left, top
     #
@@ -85,7 +105,7 @@ def trans_used_layer(used_layer_, H_W_factor):
                 # direction, x, y
                 used_layer[i][j][1:] = \
                     [int(round(x * y)) for x, y in zip(H_W_factor[::-1], used_layer[i][j][1:])]
-    return used_layer
+    # return used_layer
 
 
 #
